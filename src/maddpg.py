@@ -121,13 +121,13 @@ class MADDPGAgents(object):
         global_actions = get_global_view(raw_actions)
         
         # Update the critic.
-        mu_prime = [self._agents[i].mu_target(local_states[i]) for i in range(self.agent_num)]
-        q_prime = agent.q_target(torch.cat([global_next_states] + mu_prime, 1))
+        mu_prime = [self._agents[i].mu_target(local_next_states[i]) for i in range(self.agent_num)]
+        q_prime = agent.q_target(torch.cat([global_next_states] + mu_prime, 1).to(device))
 
         y = local_rewards[agent_index] + self.gamma * q_prime * (1. - local_dones[agent_index])
         y = y.detach()
         
-        q = agent.q_local(torch.cat((global_states, global_actions), 1))
+        q = agent.q_local(torch.cat((global_states, global_actions), 1).to(device))
         critic_loss = F.mse_loss(y, q)
         agent.q_optimizer.zero_grad()
         critic_loss.backward()
@@ -135,9 +135,14 @@ class MADDPGAgents(object):
         agent.q_optimizer.step()
 
         # Update the actor.
-        predicted_actions = agent.mu_local(local_states[agent_index])
-        mu_prime[agent_index] = predicted_actions
-        policy_loss = -agent.q_local(torch.cat([global_states] + mu_prime, 1)).mean()
+        mu = []
+        for i in range(self.agent_num):
+            mu_i = self._agents[i].mu_local(local_states[i])
+            if i != agent_index:
+                mu_i = mu_i.detach()
+            mu.append(mu_i)
+
+        policy_loss = -agent.q_local(torch.cat([global_states] + mu, 1).to(device)).mean()
         agent.mu_optimizer.zero_grad()
         policy_loss.backward()
         nn.utils.clip_grad_norm_(agent.mu_local.parameters(), self.grad_clip)
@@ -145,6 +150,8 @@ class MADDPGAgents(object):
 
         # Soft update the target networks.
         agent.soft_update()
+        
+        return policy_loss.cpu().detach().item(), critic_loss.cpu().detach().item()
 
 
     def save_model(self, model_dir):

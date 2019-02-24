@@ -5,7 +5,7 @@ from src import *
 from unityagents import UnityEnvironment
 import numpy as np
 
-np.set_printoptions(precision=2)
+np.set_printoptions(precision=3)
 
 env = UnityEnvironment(file_name="data/Tennis_Linux_NoVis/Tennis")
 env = EnvWrapper(unity_env=env, brain_name='TennisBrain')
@@ -20,12 +20,12 @@ config = {
     
     # Configs for the individual DDPG agent.
     'tau': 1e-3,
-    'gamma': 0.96,
-    'init_weight_scale': 0.3,
+    'gamma': 0.99,
+    'init_weight_scale': 1.,
     'grad_clip': 10.,
-    'actor_hidden': [64, 64, 64],
+    'actor_hidden': [256, 128, 64],
     'actor_lr': 1e-3,
-    'critic_hidden': [128, 128, 128],
+    'critic_hidden': [1024, 256, 64],
     'critic_lr': 1e-4,
     'action_repeat': 1,
     
@@ -43,6 +43,7 @@ config = {
     'log_file': './log.pickle',
     'window_size': 100,
     'log_interval': 100,
+    'tensorboard_log_dir': './tblog',
 }
 # print(json.dumps(config, indent=4))
 agents = MADDPGAgents(config)

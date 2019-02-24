@@ -4,6 +4,7 @@ import copy, time, random, json, os
 import torch
 import torch.nn as nn
 import pickle
+from tensorboardX import SummaryWriter
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -160,6 +161,10 @@ class ReplayBuffer:
         
         return states, actions, next_states, rewards, dones
 
+    def merge_from(self, another_buffer):
+        for e in another_buffer.memory:
+            self.memory.append(e)
+
     def __len__(self):
         """Return the current size of internal memory."""
         return len(self.memory)
@@ -185,17 +190,14 @@ class OUNoise:
         """Reset the internal state (= noise) to mean (mu)."""
         self.state = copy.copy(self.mu)
         self.coef = 1.
-        # The first several samples are highly biased so we skip them.
-        for _ in range(10):
-            self.sample()
 
-    def sample(self):
+    def add_to(self, v):
         """Update internal state and return it as a noise sample."""
         x = self.state
         dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
         self.state = x + dx
         self.coef *= self.discount
-        return self.state * self.coef
+        return self.state * self.coef + v * (1. - self.coef)
 
 
 def TrainMADDPG(env, agent, config):
@@ -218,6 +220,7 @@ def TrainMADDPG(env, agent, config):
     buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
     noise = OUNoise((agent_num, action_size), seed, discount=config['noise_discount'])
     logger = RLTrainingLogger(config['window_size'], config['log_file'], config['log_interval'])
+    tb_logger = SummaryWriter(log_dir=config['tensorboard_log_dir'])
     
     # The main training process.
     total_step_num = 0
@@ -234,9 +237,9 @@ def TrainMADDPG(env, agent, config):
         logger.episode_begin()
         state = np.concatenate([raw_state for _ in range(action_repeat)], 1)
         episode_rewards = []
+        episode_buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
         while not done:
-            action = agent.act(state)
-            action += noise.sample()
+            action = noise.add_to(agent.act(state))
             action = np.clip(action, a_min=out_low, a_max=out_high)
             states = []
             for _ in range(action_repeat):
@@ -246,18 +249,33 @@ def TrainMADDPG(env, agent, config):
                 episode_rewards.append(reward)
             # print('Interacting: next_state.shape =', next_state.shape)
             next_state = np.concatenate(states, 1)
-            buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
+            episode_buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
             state = next_state
             if len(buffer) > batch_num and total_step_num % learn_interval == 0:
                 for i in range(agent_num):
-                    agent.learn(i, buffer.sample())
+                    policy_loss, critic_loss = agent.learn(i, buffer.sample())
+                    tb_logger.add_scalars('agent%i/losses' % i,
+                           {'critic_loss': critic_loss,
+                            'policy_loss': policy_loss},
+                           total_step_num)
+
         # Take the max reward over all agents as the final reward of the episode.
-        logger.episode_end(max(sum(episode_rewards)))
+        episode_reward = max(sum(episode_rewards))
+        logger.episode_end(episode_reward)
         total_episode_num += 1
         
+        # Only add current episode if there is any positive reward.
+        if max(sum(episode_rewards)) > 0.:
+            buffer.merge_from(episode_buffer)
+            
         # Save the model as long as its recent smoothed reward is higher than
         # the previous best performance by some margin.
         smooth_performance = logger.reward_log.get_latest_record()[1]
-        if best_performance is None or smooth_performance > best_performance + .5:
+        if best_performance is None or smooth_performance > best_performance + .01:
             agent.save_model(config.get('model_dir'))
             best_performance = smooth_performance
+
+        tb_logger.add_scalars(
+            'max_reward',
+            {'smooth_reward': smooth_performance},
+            total_episode_num)
