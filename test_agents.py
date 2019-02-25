@@ -20,12 +20,12 @@ config = {
     
     # Configs for the individual DDPG agent.
     'tau': 1e-3,
-    'gamma': 0.99,
+    'gamma': 0.95,
     'init_weight_scale': 1.,
     'grad_clip': 10.,
     'actor_hidden': [256, 128, 64],
     'actor_lr': 1e-3,
-    'critic_hidden': [1024, 256, 64],
+    'critic_hidden': [512, 256, 128],
     'critic_lr': 1e-4,
     'action_repeat': 1,
     
@@ -33,11 +33,11 @@ config = {
     'noise_discount': 0.9999,
     'seed': 1317317,
     'buffer_size': int(1e7),
-    'batch_num': 16,
+    'batch_num': 1024,
     'model_dir': './saved_model',
     'max_episode_num': 1e6,
     'max_step_num': 1e8,
-    'learn_interval': 1,
+    'learn_interval': 100,
     
     # Configs for logging.
     'log_file': './log.pickle',

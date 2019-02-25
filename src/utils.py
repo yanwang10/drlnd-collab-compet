@@ -237,7 +237,6 @@ def TrainMADDPG(env, agent, config):
         logger.episode_begin()
         state = np.concatenate([raw_state for _ in range(action_repeat)], 1)
         episode_rewards = []
-        episode_buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
         while not done:
             action = noise.add_to(agent.act(state))
             action = np.clip(action, a_min=out_low, a_max=out_high)
@@ -249,7 +248,7 @@ def TrainMADDPG(env, agent, config):
                 episode_rewards.append(reward)
             # print('Interacting: next_state.shape =', next_state.shape)
             next_state = np.concatenate(states, 1)
-            episode_buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
+            buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
             state = next_state
             if len(buffer) > batch_num and total_step_num % learn_interval == 0:
                 for i in range(agent_num):
@@ -264,10 +263,6 @@ def TrainMADDPG(env, agent, config):
         logger.episode_end(episode_reward)
         total_episode_num += 1
         
-        # Only add current episode if there is any positive reward.
-        if max(sum(episode_rewards)) > 0.:
-            buffer.merge_from(episode_buffer)
-            
         # Save the model as long as its recent smoothed reward is higher than
         # the previous best performance by some margin.
         smooth_performance = logger.reward_log.get_latest_record()[1]
