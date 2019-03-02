@@ -96,7 +96,9 @@ class RLTrainingLogger:
     def __init__(self, window_size=100, log_file=None, log_interval=50):
         self.reward_log = SmoothAccumulator(window_size)
         self.time_log = SmoothAccumulator(window_size)
+        self.step_log = SmoothAccumulator(window_size)
         self._episode_count = 0
+        self._step_count = 0
         self._start_timestamp = None
         self._log_file = log_file
         self._log_interval = log_interval
@@ -104,16 +106,19 @@ class RLTrainingLogger:
     def episode_begin(self):
         self._start_timestamp = time.time()
 
-    def episode_end(self, reward):
+    def episode_end(self, reward, step_num):
         time_interval = time.time() - self._start_timestamp
         self._start_timestamp = None
         self.reward_log.add(reward)
         self.time_log.add(time_interval)
+        self.step_log.add(step_num)
+        self._step_count += step_num
         self._episode_count += 1
-        r, smooth_r = self.reward_log.get_latest_record()
-        t, smooth_t = self.time_log.get_latest_record()
-        print('\rEpisode %4d: reward = %.3f (%.3f), time = %.2fs (%.2fs)' %
-              (self._episode_count, r, smooth_r, t, smooth_t), end='')
+        _, smooth_r = self.reward_log.get_latest_record()
+        _, smooth_t = self.time_log.get_latest_record()
+        _, smooth_s = self.step_log.get_latest_record()
+        print('\repisode: %6d, step: %7d, reward: %.3f, avg_step: %3d, avg_time: %.2fs' %
+              (self._episode_count, self._step_count, smooth_r, smooth_s, smooth_t), end='')
         if self._episode_count % self._log_interval == 0:
             print('')
             if self._log_file:
@@ -234,12 +239,13 @@ def TrainMADDPG(env, agent, config):
     while total_step_num < max_step_num and total_episode_num < max_episode_num:
         # Start an episode
         raw_state = env.reset()
-        done = False
+        episode_done = False
         logger.episode_begin()
         state = np.concatenate([raw_state for _ in range(action_repeat)], 1)
         episode_rewards = []
         episode_buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
-        while not done:
+        beginning_step = total_step_num
+        while not episode_done:
             action = noise.add_to(agent.act(state))
             action = np.clip(action, a_min=out_low, a_max=out_high)
             states = []
@@ -249,6 +255,7 @@ def TrainMADDPG(env, agent, config):
                 states.append(next_raw_state)
                 episode_rewards.append(reward)
             # print('Interacting: next_state.shape =', next_state.shape)
+            episode_done = any(done)
             next_state = np.concatenate(states, 1)
             episode_buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
             state = next_state
@@ -263,15 +270,15 @@ def TrainMADDPG(env, agent, config):
         # Calculate the lambda-return and store the results into global replay buffer.
         discounted_return = None
         for s, a, r, ns, d in reversed(episode_buffer.memory):
-            if discounted_return:
-                discounted_return = r + discounted_return * lambda_return
-            else:
+            if discounted_return is None:
                 discounted_return = r
+            else:
+                discounted_return = r + discounted_return * lambda_return
             buffer.add(s, a, discounted_return, ns, d)
 
         # Take the max reward over all agents as the final reward of the episode.
         episode_reward = max(sum(episode_rewards))
-        logger.episode_end(episode_reward)
+        logger.episode_end(episode_reward, total_step_num - beginning_step)
         total_episode_num += 1
         
         # Save the model as long as its recent smoothed reward is higher than

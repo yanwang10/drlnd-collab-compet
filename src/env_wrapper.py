@@ -50,8 +50,8 @@ class EnvWrapper:
             reward = np.array(env_info.rewards)
             done = env_info.local_done
             self.cur_state = self.transform_obs(obs)
-            for i in range(len(done)):
-                done[i] |= self.this_episode_len >= self.max_episode_len
+            # for i in range(len(done)):
+            #     done[i] |= self.this_episode_len >= self.max_episode_len
             return self.cur_state, reward, done
         else:
             raise NotImplementedError

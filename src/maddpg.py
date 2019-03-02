@@ -17,9 +17,12 @@ def soft_update(src, dst, tau):
             tau * src_param.data + (1.0 - tau) * dst_param.data)
 
 class SingleDDPGAgent(object):
-    def __init__(self, config):
+    def __init__(self, config, index):
         self.tau = config.get('tau')
         seed = config.get('seed')
+        # Change the seed a little according to the index to make agents got
+        # different initial status.
+        seed = (seed ** (index + 1)) % 1000000
         agent_num = config.get('agent_num')
         actor_hidden = config.get('actor_hidden')
         critic_hidden = config.get('critic_hidden')
@@ -96,7 +99,7 @@ class MADDPGAgents(object):
         self.grad_clip = config.get('grad_clip')
         self.action_size = config.get('action_size')
         
-        self._agents = [SingleDDPGAgent(config) for _ in range(self.agent_num)]
+        self._agents = [SingleDDPGAgent(config, i) for i in range(self.agent_num)]
         self._agents[0].summary()
         
     def act(self, states):
