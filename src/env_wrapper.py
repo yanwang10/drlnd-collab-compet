@@ -1,4 +1,5 @@
 import numpy as np
+import time
 
 UNITY = 'unity'
 
@@ -31,10 +32,10 @@ class EnvWrapper:
         else:
             raise NotImplementedError
 
-    def reset(self):
+    def reset(self, train_mode=True):
         self.this_episode_len = 0
         if self.env_type == UNITY:
-            env_info = self.env.reset(train_mode=True)[self.brain_name]
+            env_info = self.env.reset(train_mode=train_mode)[self.brain_name]
             self.cur_state = self.transform_obs(env_info.vector_observations)
         else:
             raise NotImplementedError
@@ -42,6 +43,7 @@ class EnvWrapper:
 
     def step(self, action):
         self.this_episode_len += 1
+        # time.sleep(1)
         if self.env_type == UNITY:
             env_info = self.env.step(action)[self.brain_name]
             obs = env_info.vector_observations

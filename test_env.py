@@ -14,7 +14,7 @@ np.set_printoptions(precision=2, linewidth=200)
 env = UnityEnvironment(file_name="data/Tennis_Linux_NoVis/Tennis")
 env = EnvWrapper(unity_env=env, brain_name='TennisBrain')
 
-state = env.reset()
+state = env.reset(train_mode=False)
 
 print_state(state)
 

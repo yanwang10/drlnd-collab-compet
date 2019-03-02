@@ -214,6 +214,7 @@ def TrainMADDPG(env, agent, config):
     learn_interval = config['learn_interval']
     out_low = config['out_low']
     out_high = config['out_high']
+    lambda_return = config['lambda_return']
     
     # Prepare the utilities.
     os.makedirs(config['model_dir'], exist_ok=True)
@@ -237,6 +238,7 @@ def TrainMADDPG(env, agent, config):
         logger.episode_begin()
         state = np.concatenate([raw_state for _ in range(action_repeat)], 1)
         episode_rewards = []
+        episode_buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
         while not done:
             action = noise.add_to(agent.act(state))
             action = np.clip(action, a_min=out_low, a_max=out_high)
@@ -248,15 +250,24 @@ def TrainMADDPG(env, agent, config):
                 episode_rewards.append(reward)
             # print('Interacting: next_state.shape =', next_state.shape)
             next_state = np.concatenate(states, 1)
-            buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
+            episode_buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
             state = next_state
             if len(buffer) > batch_num and total_step_num % learn_interval == 0:
                 for i in range(agent_num):
                     policy_loss, critic_loss = agent.learn(i, buffer.sample())
-                    tb_logger.add_scalars('agent%i/losses' % i,
+                    tb_logger.add_scalars('agent/%d' % i,
                            {'critic_loss': critic_loss,
                             'policy_loss': policy_loss},
                            total_step_num)
+
+        # Calculate the lambda-return and store the results into global replay buffer.
+        discounted_return = None
+        for s, a, r, ns, d in reversed(episode_buffer.memory):
+            if discounted_return:
+                discounted_return = r + discounted_return * lambda_return
+            else:
+                discounted_return = r
+            buffer.add(s, a, discounted_return, ns, d)
 
         # Take the max reward over all agents as the final reward of the episode.
         episode_reward = max(sum(episode_rewards))

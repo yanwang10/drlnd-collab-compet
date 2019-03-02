@@ -41,8 +41,8 @@ class ActorNetwork(nn.Module):
     def __init__(self, in_dim, out_dim, hidden=[], out_range=(None,None), seed=13173, init_weight_scale=1.0):
         super(ActorNetwork, self).__init__()
         assert(len(hidden) > 0)
-        self.feature = BasicNetwork(in_dim, hidden[-1], hidden[:-1], F.relu, seed, init_weight_scale)
-        self.output = BasicNetwork(hidden[-1], out_dim, seed=seed, init_weight_scale=init_weight_scale)
+        self.feature = BasicNetwork(in_dim, hidden[-1], hidden[:-1], F.tanh, seed, init_weight_scale)
+        self.output = BasicNetwork(hidden[-1], out_dim, nonlinear=F.tanh, seed=seed, init_weight_scale=init_weight_scale)
         self.out_low, self.out_high = out_range
         assert((self.out_low is None) == (self.out_high is None))
         
