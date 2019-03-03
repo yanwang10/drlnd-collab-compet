@@ -1,10 +1,12 @@
 import numpy as np
 from collections import deque, namedtuple
-import copy, time, random, json, os
+import copy, time, random, json, os, heapq
 import torch
 import torch.nn as nn
 import pickle
+from operator import itemgetter
 from tensorboardX import SummaryWriter
+from .per import Memory
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -144,19 +146,19 @@ class ReplayBuffer:
             batch_size (int): size of each training batch
             seed (int): random seed
         """
-        self.memory = deque(maxlen=buffer_size)
+        self.memory = Memory(buffer_size)
         self.batch_size = batch_size
         self.experience = namedtuple("Experience", field_names=["state", "action", "reward", "next_state", "done"])
         self.seed = random.seed(seed)
 
-    def add(self, state, action, reward, next_state, done):
+    def add(self, state, action, reward, next_state, done, err):
         """Add a new experience to memory."""
         e = self.experience(state, action, reward, next_state, np.array(done).astype(np.uint8))
-        self.memory.append(e)
+        self.memory.add(err, e)
 
     def sample(self):
         """Randomly sample a batch of experiences from memory."""
-        experiences = random.sample(self.memory, k=self.batch_size)
+        experiences, idxs, _ = self.memory.sample(self.batch_size)
         
         states = [e.state for e in experiences]
         actions = [e.action for e in experiences]
@@ -164,7 +166,7 @@ class ReplayBuffer:
         rewards = [e.reward for e in experiences]
         dones = [e.done for e in experiences]
         
-        return states, actions, next_states, rewards, dones
+        return idxs, (states, actions, next_states, rewards, dones)
 
     def merge_from(self, another_buffer):
         for e in another_buffer.memory:
@@ -172,7 +174,7 @@ class ReplayBuffer:
 
     def __len__(self):
         """Return the current size of internal memory."""
-        return len(self.memory)
+        return self.memory.tree.n_entries
 
 
 class OUNoise:
@@ -202,7 +204,7 @@ class OUNoise:
         dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
         self.state = x + dx
         self.coef *= self.discount
-        return self.state * self.coef + v * (1. - self.coef)
+        return self.state * self.coef * random.choice([1., -1.]) + v * (1. - self.coef)
 
 
 def TrainMADDPG(env, agent, config):
@@ -220,6 +222,7 @@ def TrainMADDPG(env, agent, config):
     out_low = config['out_low']
     out_high = config['out_high']
     lambda_return = config['lambda_return']
+    warmup_step = config['warmup_step']
     
     # Prepare the utilities.
     os.makedirs(config['model_dir'], exist_ok=True)
@@ -243,7 +246,7 @@ def TrainMADDPG(env, agent, config):
         logger.episode_begin()
         state = np.concatenate([raw_state for _ in range(action_repeat)], 1)
         episode_rewards = []
-        episode_buffer = ReplayBuffer(config['buffer_size'], batch_num, seed)
+        episode_buffer = []
         beginning_step = total_step_num
         while not episode_done:
             action = noise.add_to(agent.act(state))
@@ -254,27 +257,43 @@ def TrainMADDPG(env, agent, config):
                 total_step_num += 1
                 states.append(next_raw_state)
                 episode_rewards.append(reward)
+                if any(done):
+                    break
             # print('Interacting: next_state.shape =', next_state.shape)
             episode_done = any(done)
-            next_state = np.concatenate(states, 1)
-            episode_buffer.add(state, action, sum(episode_rewards[-action_repeat:]), next_state, done)
+            if len(states) == action_repeat:
+                next_state = np.concatenate(states, 1)
+                acc_reward = sum(episode_rewards[-action_repeat:])
+                td_err = agent.calc_td_error(state, action, acc_reward, next_state)
+                episode_buffer.append((state, action, acc_reward, next_state, done, sum(np.absolute(td_err))))
             state = next_state
-            if len(buffer) > batch_num and total_step_num % learn_interval == 0:
+        
+            # Update params from experience replay.
+            if len(buffer) > batch_num and total_step_num > warmup_step:# and total_episode_num % learn_interval == 0:
+                idxs, experiences = buffer.sample()
+                td_err = np.zeros((batch_num, agent_num))
                 for i in range(agent_num):
-                    policy_loss, critic_loss = agent.learn(i, buffer.sample())
-                    tb_logger.add_scalars('agent/%d' % i,
-                           {'critic_loss': critic_loss,
-                            'policy_loss': policy_loss},
-                           total_step_num)
-
+                    err, policy_loss, critic_loss = agent.learn(i, experiences)
+                    td_err[:, i] = err
+                    tb_logger.add_scalars('loss/critic/',
+                           {'agent%d' % i: critic_loss}, total_step_num)
+                    tb_logger.add_scalars('loss/policy/', {
+                            'agent%d' % i: policy_loss}, total_step_num)
+                for i, idx in enumerate(idxs):
+                    buffer.memory.update(idx, sum(np.absolute(td_err[i, :])))
+                    tb_logger.add_scalars('td_err/',
+                        {'step': sum(np.absolute(td_err[i, :]))},
+                         batch_num * total_episode_num + i)
+            
         # Calculate the lambda-return and store the results into global replay buffer.
         discounted_return = None
-        for s, a, r, ns, d in reversed(episode_buffer.memory):
+        for s, a, r, ns, d, err in reversed(episode_buffer):
             if discounted_return is None:
                 discounted_return = r
             else:
                 discounted_return = r + discounted_return * lambda_return
-            buffer.add(s, a, discounted_return, ns, d)
+            buffer.add(s, a, discounted_return, ns, d, err)
+
 
         # Take the max reward over all agents as the final reward of the episode.
         episode_reward = max(sum(episode_rewards))
@@ -289,6 +308,6 @@ def TrainMADDPG(env, agent, config):
             best_performance = smooth_performance
 
         tb_logger.add_scalars(
-            'max_reward',
+            'reward/episode',
             {'smooth_reward': smooth_performance},
             total_episode_num)
